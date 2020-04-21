@@ -8,32 +8,29 @@ import itertools
 from astropy.stats import sigma_clipped_stats
 
 NUM_AMPS = 16
-BIN_ROW = 1
-BIN_COL = 1
+BIN_ROW = 10
+BIN_COL = 10
 ROI = [875,1125,375,625] 
 ROI = [None, None, None, None]
 
 
 def get_ptc(pair_list, by_amp=True, roi=[None,None,None,None], bin_row=1, bin_col=1, read_noise=0.):
     """
-    Use provided file list to make a photon transfer curve using the diff image method.
-    Assumes exposures of same exposure length are grouped, but do *not* need to specify break points.
-    E.g., the exposure times can be of the form [e1,e1,e1,e1,e2,e2,e2,e2,...]
-    but can not be mixed [e1,e2,e1,e1,e3,e2,...]
-
-
+    Use provided list of flat pairs to make a photon transfer curve using the diff image method.
     returns mean, variance, K-values (from Janesick)
     """
     exp_times = np.zeros(pair_list.shape[0])
     if by_amp:
-        variances = np.zeros((pair_list.shape[0], NUM_AMPS))*np.nan
-        means = np.zeros_like(variances)*np.nan
-        K_values = np.zeros_like(variances)*np.nan
+        variances = np.zeros((pair_list.shape[0], NUM_AMPS))
+        means = np.zeros_like(variances)
+        di_means = np.zeros_like(variances)
+        K_values = np.zeros_like(variances)
         segment_names = np.zeros(NUM_AMPS).astype(np.str)
     else:
-        variances = np.zeros(pair_list.shape[0])*np.nan
-        means = np.zeros_like(variances)*np.nan
-        K_values = np.zeros_like(variances)*np.nan
+        variances = np.zeros(pair_list.shape[0])
+        means = np.zeros_like(variances)
+        di_means = np.zeros_like(variances)
+        K_values = np.zeros_like(variances)
         segment_names = [None]
 
     remove_rows = []
@@ -63,6 +60,7 @@ def get_ptc(pair_list, by_amp=True, roi=[None,None,None,None], bin_row=1, bin_co
                     region2 = atsh.rebin_image(region2, bin_row, bin_col)
                 di_mean, di_med, di_var = atsh.diff_image_stats(region1, region2)
                 variances[i,j] = di_var - read_noise**2.
+                di_means[i,j] = di_mean
                 means[i,j] = np.mean((region1+region2).flatten()/2.)
                 K_values[i,j] = means[i,j]/variances[i,j]
                 print('K_value, amp {}: {}'.format(a1[1], K_values[i,j]))
@@ -71,6 +69,7 @@ def get_ptc(pair_list, by_amp=True, roi=[None,None,None,None], bin_row=1, bin_co
             region2 = d2.image[roi[0]:roi[1],roi[2]:roi[3]] 
             di_mean, di_med, di_var = atsh.diff_image_stats(region1, region2)
             variances[i] = vi_var - read_noise**2.
+            di_means[i] = di_mean
             means[i] = np.mean((region1+region2).flatten()/2.)
             K_values[i] = means[i]/variances[i]
             print('K-value: {}'.format(K_values[i]))
@@ -79,7 +78,7 @@ def get_ptc(pair_list, by_amp=True, roi=[None,None,None,None], bin_row=1, bin_co
     variances = np.delete(variances, remove_rows, axis=0)
     K_values = np.delete(K_values, remove_rows, axis=0)
     exp_times = np.delete(exp_times, remove_rows, axis=0)
-    return means, variances, K_values, exp_times, segment_names
+    return means, di_means, variances, K_values, exp_times, segment_names
 
 
 fend = '-det000.fits'
@@ -87,31 +86,37 @@ fend = '-det000.fits'
 #PTC Set 1
 fbase = '/lsstdata/offline/teststand/auxTel/L1Archiver/gen2repo/raw/2020-02-21/2020022100'
 fnums = np.arange(13,61)
+ptc_run_1 = np.ones_like(fnums).astype(int)*1.
 flist1 = np.array([fbase+'%03d'%f+fend for f in fnums])
 
 
 #PTC Set 2
 fbase = '/lsstdata/offline/teststand/auxTel/L1Archiver/gen2repo/raw/2020-02-19/2020021900'
 fnums = np.arange(41,129)
+ptc_run_2 = np.ones_like(fnums).astype(int)*2
 flist2 = np.array([fbase+'%03d'%f+fend for f in fnums])
 
 #PTC Set 3
 fbase = '/lsstdata/offline/teststand/auxTel/L1Archiver/gen2repo/raw/2020-03-13/2020031300'
 fnums = np.arange(13,29)
+ptc_run_3 = np.ones_like(fnums).astype(int)*3
 flist3 = np.array([fbase+'%03d'%f+fend for f in fnums])
 
 #PTC Set 4
 fbase = '/lsstdata/offline/teststand/auxTel/L1Archiver/gen2repo/raw/2020-03-13/2020031300'
 fnums = np.arange(57,97)
+ptc_run_4 = np.ones_like(fnums).astype(int)*4
 flist4 = np.array([fbase+'%03d'%f+fend for f in fnums])
 
 flist = np.concatenate((flist1,flist2,flist3,flist4))
+run_list = np.concatenate((ptc_run_1, ptc_run_2, ptc_run_3, ptc_run_4))
 
 
 
 image_pair_list = np.array(atsh.group_image_pairs(flist, by_next=True))
+run_pair_list = np.array(atsh.group_image_pairs(run_list, by_next=True))
 
-means, variances, K_values, exp_times, segment_names = get_ptc(image_pair_list, by_amp=True, roi=ROI, bin_row=BIN_ROW, bin_col=BIN_COL)
+means, di_means, variances, K_values, exp_times, segment_names = get_ptc(image_pair_list, by_amp=True, roi=ROI, bin_row=BIN_ROW, bin_col=BIN_COL)
 
 f1 = plt.figure()
 plt.title('BINNING: {}x{}'.format(BIN_ROW,BIN_COL))
@@ -136,14 +141,19 @@ for f in [f1,f2]:
     plt.legend(ncol=2)
     plt.xlabel('Signal [DN]')
 
-plt.show()
+plt.figure(f2.number)
+for i in range(14,18):
+    plt.axvline(BIN_ROW*BIN_COL*2**i-1, ls='--', color='r', lw=2)
 
-if True:
+plt.show(block=False)
+
+if False:
     for i,name in enumerate(segment_names):
-        fname = './ptc_by_amp/{}_binning_{}x{}_roi_{}_{}_{}_{}.dat'.format(
+        fname = '../ptc_by_amp/{}_binning_{}x{}_roi_{}_{}_{}_{}.dat'.format(
                     name, BIN_ROW, BIN_COL, ROI[0], ROI[1], ROI[2], ROI[3])
-        np.savetxt(fname, np.column_stack((means[:,i], variances[:,i], K_values[:,i], exp_times)),
-                   header='Mean-Signal-[DN], Variance-[DN^2], K_value-[e-/DN] Exp_time-[s]')
+        np.savetxt(fname, np.column_stack((
+            means[:,i], di_means[:,i], variances[:,i], K_values[:,i], exp_times, run_pair_list[:,0])),
+            header='Mean-Signal-[DN], Variance-[DN^2], K_value-[e-/DN] Exp_time-[s] Run-ID')
     
     
     

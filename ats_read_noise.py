@@ -13,45 +13,27 @@ BIN_COL = 1
 ROI = [None, None, None, None] 
 
 
-def group_image_pairs(file_list):
-    image_pair_lists = list(itertools.combinations(file_list, 2))
-    return image_pair_lists
-
-
-def diff_image_stats(img1, img2, sigma_clip=True):
-    diff_img = (img1 - img2).flatten()
-    if sigma_clip:
-        mean, med, stddev = sigma_clipped_stats(diff_img)
-        var = stddev**2./2.
-    else:
-        mean = np.mean(diff_img)
-        med = np.median(diff_img)
-        var = np.stddev(diff_img)**2./2.
-    return mean, med, var
-
-def rebin_image(img, bin_row, bin_col):
-    kernel = np.ones((bin_row, bin_col)).astype(np.int)
-    c = convolve(img, kernel, mode='valid')
-    return c[::bin_row, ::bin_col]
-
-def get_read_noise(pair_list, by_amp=True, roi=[None,None,None,None], bin_row=1, bin_col=1, npairs=250):
+def get_read_noise(pair_list, by_amp=True, roi=[None,None,None,None], bin_row=1, bin_col=1, npairs=None):
     """
     Use provided file list to make a read noise measurement using the diff image method.
 
     returns mean, variance, read_noise [DN]
     """
+    if npairs != None:
+        idxs = np.random.choice(np.arange(0,len(pair_list)), npairs, replace=False)
+        pair_list = np.array(pair_list)[idxs]
 
-    idxs = np.random.choice(np.arange(0,len(pair_list)), npairs, replace=False)
-    pair_list = np.array(pair_list)[idxs]
     if by_amp:
-        variances = np.zeros((len(pair_list), NUM_AMPS))*np.nan
-        means = np.zeros_like(variances)*np.nan
-        read_noises = np.zeros_like(variances)*np.nan
+        variances = np.zeros((len(pair_list), NUM_AMPS))
+        means = np.zeros_like(variances)
+        di_means = np.zeros_like(variances)
+        read_noises = np.zeros_like(variances)
         segment_names = np.zeros(NUM_AMPS).astype(np.str)
     else:
-        variances = np.zeros(len(pair_list))*np.nan
-        means = np.zeros_like(variances)*np.nan
-        read_noises = np.zeros_like(variances)*np.nan
+        variances = np.zeros(len(pair_list))
+        means = np.zeros_like(variances)
+        di_means = np.zeros_like(variances)
+        read_noises = np.zeros_like(variances)
         segment_names = [None]
 
     for i,files in enumerate(pair_list):
@@ -61,7 +43,8 @@ def get_read_noise(pair_list, by_amp=True, roi=[None,None,None,None], bin_row=1,
         d2 = atsi.ATSImage(f2)
         assert(d1.imagetype=='BIAS'), 'IMAGE {} IS NOT A BIAS'.format(f1)
         assert(d2.imagetype=='BIAS'), 'IMAGE {} IS NOT A BIAS'.format(f2)
-
+        #plt.imshow(d1.image - d2.image, origin='lower', vmin=-20, vmax=20)
+        #plt.show(block=True)
         if by_amp:
             for j,a in enumerate(zip(d1.amp_names, d2.amp_names)):
                 a1, a2 = a
@@ -71,25 +54,27 @@ def get_read_noise(pair_list, by_amp=True, roi=[None,None,None,None], bin_row=1,
                 region2 = d2.amp_images[a2][roi[0]:roi[1],roi[2]:roi[3]] 
 
                 if bin_row != 1 or bin_col != 1:
-                    region1 = rebin_image(region1, bin_row, bin_col)
-                    region2 = rebin_image(region2, bin_row, bin_col)
+                    region1 = atsh.rebin_image(region1, bin_row, bin_col)
+                    region2 = atsh.rebin_image(region2, bin_row, bin_col)
                 region1 = region1.astype(np.float)
                 region2 = region2.astype(np.float)
-                di_mean, di_med, di_var = diff_image_stats(region1, region2)
+                di_mean, di_med, di_var = atsh.diff_image_stats(region1, region2)
                 variances[i,j] = di_var
+                di_means[i,j] = di_mean
                 means[i,j] = np.mean((region1+region2).flatten()/2.)
                 read_noises[i,j] = np.sqrt(variances[i,j])
                 print('Read noise, amp {}: {}'.format(a1, read_noises[i,j]))
         else:
             region1 = d1.image[roi[0]:roi[1],roi[2]:roi[3]]
             region2 = d2.image[roi[0]:roi[1],roi[2]:roi[3]] 
-            di_mean, di_med, di_var = diff_image_stats(region1, region2)
+            di_mean, di_med, di_var = atsh.diff_image_stats(region1, region2)
             variances[i] = di_var
+            di_means[i] = di_mean
             means[i] = np.mean((region1+region2).flatten()/2.)
             read_noises[i] = means[i]/variances[i]
             print('Read noise: {}'.format(read_noises[i]))
 
-    return means, variances, read_noises, segment_names
+    return means, di_means, variances, read_noises, segment_names
 
 
 #fnums = np.arange(348, 453, 1)
@@ -102,9 +87,9 @@ fend = '-det000.fits'
 
 flist = [fbase+'%03d'%f+fend for f in fnums]
 
-image_pair_list = np.array(group_image_pairs(flist))
+image_pair_list = np.array(atsh.group_image_pairs(flist, by_next=True))
 
-means, variances, read_noises, segment_names = get_read_noise(image_pair_list, by_amp=True, roi=ROI, bin_row=BIN_ROW, bin_col=BIN_COL, npairs=10)
+means, di_means, variances, read_noises, segment_names = get_read_noise(image_pair_list, by_amp=True, roi=ROI, bin_row=BIN_ROW, bin_col=BIN_COL)
 
 f1 = plt.figure()
 plt.ylabel('Number')
@@ -119,24 +104,24 @@ plt.xlabel('Read Noise [DN]')
 plt.show()
 
 
-if False:
+if True:
     for i,name in enumerate(segment_names):
-        fname = './read_noise_by_amp/{}.dat'.format(name)
-        np.savetxt(fname, np.column_stack((means[:,i], variances[:,i], read_noises[:,i])),
-                   header='Mean-Signal-[DN], Variance-[DN^2], Read-noise-[e-/DN]')
+        fname = '../read_noise_by_amp/{}.dat'.format(name)
+        np.savetxt(fname, np.column_stack((means[:,i], di_means[:,i], variances[:,i], read_noises[:,i])),
+                   header='Mean-Signal-[DN], DI-Mean-Signal-[DN], Variance-[DN^2], Read-noise-[e-/DN]')
     
 
-amp_counts = np.zeros((len(flist), 16)).astype(np.float)
-for i,f in enumerate(flist):
-    print('Working on image {} of {}'.format(i,len(flist)))
-    d = atsi.ATSImage(f)
-    for j,amp in enumerate(d.amp_names):
-        amp_counts[i,j] = np.median(d.amp_images[amp])
-
-x = np.arange(amp_counts.shape[0])
-for j, amp in enumerate(d.amp_names):
-    plt.figure()
-    plt.plot(x, amp_counts[:,j], '-k.')
-    plt.title(amp)
-plt.show()
-
+#amp_counts = np.zeros((len(flist), 16)).astype(np.float)
+#for i,f in enumerate(flist):
+#    print('Working on image {} of {}'.format(i,len(flist)))
+#    d = atsi.ATSImage(f)
+#    for j,amp in enumerate(d.amp_names):
+#        amp_counts[i,j] = np.median(d.amp_images[amp])
+#
+#x = np.arange(amp_counts.shape[0])
+#for j, amp in enumerate(d.amp_names):
+#    plt.figure()
+#    plt.plot(x, amp_counts[:,j], '-k.')
+#    plt.title(amp)
+#plt.show()
+#
